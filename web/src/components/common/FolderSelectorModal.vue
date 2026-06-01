@@ -2,11 +2,30 @@
   <div class="folder-selector-shell">
     <div class="folder-selector-modal-header">
       <h3 class="folder-selector-modal-title">{{ title }}</h3>
+      <label class="folder-selector-search" title="仅筛选当前目录下已加载的文件夹">
+        <i class="fas fa-search"></i>
+        <input
+          v-model.trim="filterKeyword"
+          type="search"
+          placeholder="筛选当前目录文件夹"
+          :disabled="loading"
+          maxlength="100"
+        >
+        <button
+          v-if="filterKeyword"
+          type="button"
+          class="folder-selector-search-clear"
+          aria-label="清空筛选"
+          @click="clearDirectoryFilter"
+        >
+          <i class="fas fa-times"></i>
+        </button>
+      </label>
       <button type="button" class="folder-selector-modal-close" @click="$emit('cancel')" aria-label="关闭">×</button>
     </div>
 
     <div class="folder-selector-content">
-      <nav class="breadcrumb" style="margin-bottom:2px;">
+      <nav v-if="!locatingInitialPath" class="breadcrumb" style="margin-bottom:2px;">
         <span
           class="breadcrumb-item"
           :class="{ active: pathHistory.length === 1 }"
@@ -45,9 +64,26 @@
           ><span class="breadcrumb-item-label">{{ item.name }}</span></span>
         </template>
       </nav>
+      <div v-if="!locatingInitialPath && filterKeyword" class="folder-filter-tip">
+        仅筛选当前目录，匹配 {{ sortedDirectories.length }} 项
+      </div>
 
-      <div id="move-folder-list" class="file-list" style="margin-bottom:0;">
-        <div v-if="showCreateInput" class="file-row move-folder-input folder-row">
+      <div v-if="!locatingInitialPath" class="folder-table-header" role="row">
+        <button
+          v-for="column in sortColumns"
+          :key="column.key"
+          type="button"
+          class="folder-table-heading"
+          :class="[`col-${column.key}`, { active: sortKey === column.key }]"
+          @click="toggleSort(column.key)"
+        >
+          <span>{{ column.label }}</span>
+          <span class="sort-indicator" :class="getSortClass(column.key)"></span>
+        </button>
+      </div>
+
+      <div id="move-folder-list" class="file-list folder-table-body" style="margin-bottom:0;">
+        <div v-if="showCreateInput" class="file-row move-folder-input folder-row folder-table-row">
           <i class="icon"><SvgIcon name="folder" :size="18" /></i>
           <input
             ref="newFolderInputRef"
@@ -68,20 +104,30 @@
           </button>
         </div>
 
-        <div v-if="loading" class="folder-state">加载中...</div>
+        <div v-if="loading" class="folder-state">{{ locatingInitialPath ? '正在定位已选目录...' : '加载中...' }}</div>
         <div v-else-if="errorMessage" class="folder-state error">{{ errorMessage }}</div>
-        <div v-else-if="!visibleDirectories.length" class="folder-state">没有子目录</div>
-        <div
-          v-for="dir in visibleDirectories"
-          v-else
-          :key="dir.id"
-          class="file-row move-folder-item folder-row"
-          :title="dir.name"
-          @click="openDirectory(dir)"
-        >
-          <i class="icon"><SvgIcon name="folder" :size="18" /></i>
-          <span class="file-name">{{ dir.name }}</span>
+        <div v-else-if="!sortedDirectories.length" class="folder-state">
+          {{ filterKeyword ? '当前目录没有匹配的文件夹' : '没有子目录' }}
         </div>
+        <template v-else>
+          <div
+            v-for="dir in sortedDirectories"
+            :key="dir.id"
+            class="file-row move-folder-item folder-row folder-table-row"
+            @click="openDirectory(dir)"
+          >
+            <div class="folder-name-cell">
+              <i class="icon"><SvgIcon name="folder" :size="18" /></i>
+              <span
+                :ref="el => setFolderNameRef(dir.id, el)"
+                class="file-name"
+                :class="{ truncated: isFolderNameTruncated(dir.id) }"
+              >{{ dir.name }}</span>
+              <span v-if="isFolderNameTruncated(dir.id)" class="folder-name-tooltip">{{ dir.name }}</span>
+            </div>
+            <span class="folder-time-cell">{{ formatFolderModified(dir.modified_time) }}</span>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -97,6 +143,7 @@
         新建文件夹
       </button>
       <button
+        v-if="showRefreshButton"
         type="button"
         class="folder-selector-secondary-btn"
         :disabled="loading || creatingFolder"
@@ -115,7 +162,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import SvgIcon from '../icons/SvgIcon.vue'
 
@@ -136,6 +183,10 @@ const props = defineProps({
     type: [Number, String],
     default: '0'
   },
+  initialPath: {
+    type: String,
+    default: ''
+  },
   excludedFolderIds: {
     type: Array,
     default: () => []
@@ -143,6 +194,10 @@ const props = defineProps({
   allowCreateFolder: {
     type: Boolean,
     default: false
+  },
+  showRefreshButton: {
+    type: Boolean,
+    default: true
   }
 })
 
@@ -150,6 +205,7 @@ const emit = defineEmits(['resolve', 'cancel'])
 
 const loading = ref(false)
 const creatingFolder = ref(false)
+const locatingInitialPath = ref(false)
 const errorMessage = ref('')
 const directories = ref([])
 const currentPath = ref('root')
@@ -159,11 +215,20 @@ const dropdownOpen = ref(false)
 const showCreateInput = ref(false)
 const newFolderName = ref('')
 const newFolderInputRef = ref(null)
+const truncatedFolderIds = ref(new Set())
+const filterKeyword = ref('')
+const sortKey = ref('name')
+const sortOrder = ref('asc')
 let dropdownCloseTimer = null
+const folderNameRefs = new Map()
 
 const normalizedRootId = computed(() => String(props.rootId ?? '0'))
 const excludedFolderIdSet = computed(() => new Set((props.excludedFolderIds || []).map(id => String(id))))
 const effectiveCurrentId = computed(() => currentPath.value === 'root' ? normalizedRootId.value : currentPath.value)
+const sortColumns = [
+  { key: 'name', label: '名称' },
+  { key: 'modified_time', label: '修改时间' }
+]
 
 const hiddenBreadcrumbItems = computed(() => {
   if (pathHistory.value.length <= 3) return []
@@ -185,6 +250,64 @@ const visibleDirectories = computed(() => (
   directories.value.filter(dir => !excludedFolderIdSet.value.has(String(dir.id)))
 ))
 
+const filteredDirectories = computed(() => {
+  const keyword = filterKeyword.value.trim().toLowerCase()
+  if (!keyword) return visibleDirectories.value
+  return visibleDirectories.value.filter(dir => String(dir.name || '').toLowerCase().includes(keyword))
+})
+
+const sortedDirectories = computed(() => {
+  const order = sortOrder.value === 'desc' ? -1 : 1
+  return [...filteredDirectories.value].sort((a, b) => compareDirectories(a, b, sortKey.value, order))
+})
+
+const compareDirectories = (a, b, key, order) => {
+  if (key === 'modified_time') {
+    return compareNullableNumber(toTimestamp(a?.modified_time), toTimestamp(b?.modified_time), order)
+  }
+  return String(a?.name || '').localeCompare(String(b?.name || ''), 'zh-CN', {
+    numeric: true,
+    sensitivity: 'base'
+  }) * order
+}
+
+const compareNullableNumber = (a, b, order) => {
+  const aValid = Number.isFinite(a)
+  const bValid = Number.isFinite(b)
+  if (!aValid && !bValid) return 0
+  if (!aValid) return 1
+  if (!bValid) return -1
+  return (a - b) * order
+}
+
+const toTimestamp = (value) => {
+  if (!value) return NaN
+  const ts = new Date(value).getTime()
+  return Number.isFinite(ts) ? ts : NaN
+}
+
+const toggleSort = (key) => {
+  if (sortKey.value === key) {
+    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+    return
+  }
+  sortKey.value = key
+  sortOrder.value = key === 'name' ? 'asc' : 'desc'
+}
+
+const getSortClass = (key) => {
+  if (sortKey.value !== key) return ''
+  return sortOrder.value
+}
+
+const formatFolderModified = (value) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 const updateDisplayPath = () => {
   const names = pathHistory.value.slice(1).map(item => String(item.name || '').trim()).filter(Boolean)
   const path = '/' + names.join('/')
@@ -196,25 +319,116 @@ const resetCreateFolderState = () => {
   newFolderName.value = ''
 }
 
+const clearDirectoryFilter = () => {
+  filterKeyword.value = ''
+}
+
+const setFolderNameRef = (id, el) => {
+  const key = String(id)
+  if (el) {
+    folderNameRefs.set(key, el)
+  } else {
+    folderNameRefs.delete(key)
+  }
+}
+
+const isFolderNameTruncated = (id) => truncatedFolderIds.value.has(String(id))
+
+const updateTruncatedFolderNames = async () => {
+  await nextTick()
+  const next = new Set()
+  folderNameRefs.forEach((el, id) => {
+    if (el && el.scrollWidth > el.clientWidth + 1) {
+      next.add(id)
+    }
+  })
+  truncatedFolderIds.value = next
+}
+
+const resetToRootState = () => {
+  currentPath.value = 'root'
+  currentDisplayPath.value = '/'
+  pathHistory.value = [{ id: 'root', name: '根目录' }]
+  resetCreateFolderState()
+  clearDirectoryFilter()
+}
+
+const getInitialPathSegments = () => {
+  return String(props.initialPath || '')
+    .split('/')
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+const fetchDirectoryList = async (parentId = 'root', options = {}) => {
+  const requestParentId = parentId === 'root' ? normalizedRootId.value : String(parentId)
+  const params = new URLSearchParams({ parent_id: requestParentId })
+  if (options.forceRefresh) {
+    params.set('force_refresh', 'true')
+  }
+  const response = await axios.get(`/api/cache-retention/accounts/${props.accountId}/directories?${params.toString()}`)
+  if (!response.data.success) {
+    throw new Error(response.data.message || '加载失败')
+  }
+  return response.data.data || []
+}
+
 const loadDirectories = async (parentId = 'root', options = {}) => {
   loading.value = true
   errorMessage.value = ''
   dropdownOpen.value = false
   try {
-    const requestParentId = parentId === 'root' ? normalizedRootId.value : String(parentId)
-    const params = new URLSearchParams({ parent_id: requestParentId })
-    if (options.forceRefresh) {
-      params.set('force_refresh', 'true')
-    }
-    const response = await axios.get(`/api/cache-retention/accounts/${props.accountId}/directories?${params.toString()}`)
-    if (!response.data.success) {
-      throw new Error(response.data.message || '加载失败')
-    }
-    directories.value = response.data.data || []
+    directories.value = await fetchDirectoryList(parentId, options)
   } catch (error) {
     directories.value = []
     errorMessage.value = error?.response?.data?.message || error?.message || '加载失败'
   } finally {
+    loading.value = false
+  }
+}
+
+const initializeDirectory = async () => {
+  resetToRootState()
+  const segments = getInitialPathSegments()
+  if (!segments.length) {
+    await loadDirectories()
+    return
+  }
+
+  loading.value = true
+  locatingInitialPath.value = true
+  errorMessage.value = ''
+  dropdownOpen.value = false
+
+  try {
+    let parentId = 'root'
+    const history = [{ id: 'root', name: '根目录' }]
+
+    for (const segment of segments) {
+      const list = await fetchDirectoryList(parentId)
+      const matched = list.find(dir => String(dir.name || '').trim() === segment)
+      if (!matched) {
+        throw new Error(`目录不存在: ${segment}`)
+      }
+      parentId = String(matched.id)
+      history.push({ id: parentId, name: String(matched.name || segment) })
+    }
+
+    currentPath.value = parentId
+    pathHistory.value = history
+    updateDisplayPath()
+    directories.value = await fetchDirectoryList(parentId)
+  } catch (error) {
+    resetToRootState()
+    try {
+      directories.value = await fetchDirectoryList('root')
+    } catch (rootError) {
+      directories.value = []
+      errorMessage.value = rootError?.response?.data?.message || rootError?.message || '加载失败'
+    }
+    window.appNotification?.warning('已保存目录不存在或无法定位，已打开根目录')
+  } finally {
+    locatingInitialPath.value = false
     loading.value = false
   }
 }
@@ -229,6 +443,7 @@ const openDirectory = async (dir) => {
   pathHistory.value = [...pathHistory.value, { id: currentPath.value, name: String(dir.name) }]
   updateDisplayPath()
   resetCreateFolderState()
+  clearDirectoryFilter()
   await loadDirectories(currentPath.value)
 }
 
@@ -238,6 +453,7 @@ const navigateToIndex = async (index) => {
   currentPath.value = pathHistory.value[index].id
   updateDisplayPath()
   resetCreateFolderState()
+  clearDirectoryFilter()
   await loadDirectories(currentPath.value)
 }
 
@@ -274,6 +490,7 @@ const showCreateFolderInput = () => {
   if (!props.allowCreateFolder || creatingFolder.value) {
     return
   }
+  clearDirectoryFilter()
   showCreateInput.value = true
 }
 
@@ -337,13 +554,9 @@ const selectCurrent = () => {
 }
 
 watch(
-  () => [props.accountId, props.rootId],
+  () => [props.accountId, props.rootId, props.initialPath],
   async () => {
-    currentPath.value = 'root'
-    currentDisplayPath.value = '/'
-    pathHistory.value = [{ id: 'root', name: '根目录' }]
-    resetCreateFolderState()
-    await loadDirectories()
+    await initializeDirectory()
   },
   { immediate: true }
 )
@@ -354,6 +567,22 @@ watch(showCreateInput, async (visible) => {
     newFolderInputRef.value?.focus()
     newFolderInputRef.value?.select?.()
   }
+})
+
+watch(
+  sortedDirectories,
+  () => {
+    updateTruncatedFolderNames()
+  },
+  { flush: 'post' }
+)
+
+onMounted(() => {
+  window.addEventListener('resize', updateTruncatedFolderNames)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateTruncatedFolderNames)
 })
 </script>
 
@@ -371,8 +600,8 @@ watch(showCreateInput, async (visible) => {
 
 .folder-selector-modal-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 14px;
   padding: 20px 24px 0;
 }
 
@@ -381,6 +610,62 @@ watch(showCreateInput, async (visible) => {
   font-size: 18px;
   font-weight: 600;
   color: #2c3e50;
+  flex-shrink: 0;
+}
+
+.folder-selector-search {
+  width: 220px;
+  height: 36px;
+  margin-left: auto;
+  padding: 0 10px;
+  border-radius: 18px;
+  background: #f5f7fa;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+}
+
+.folder-selector-search i {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.folder-selector-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #334155;
+  font-size: 13px;
+}
+
+.folder-selector-search input::placeholder {
+  color: #9aa4b2;
+}
+
+.folder-selector-search input:disabled {
+  cursor: not-allowed;
+}
+
+.folder-selector-search-clear {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.folder-selector-search-clear:hover {
+  color: #475569;
 }
 
 .folder-selector-modal-close {
@@ -416,14 +701,19 @@ watch(showCreateInput, async (visible) => {
   margin-bottom: 2px !important;
 }
 
+.folder-filter-tip {
+  margin-top: 8px;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1;
+}
+
 .file-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   margin-top: 2px !important;
-  min-height: 300px !important;
-  max-height: 300px !important;
-  height: 300px !important;
+  height: auto !important;
   border: none !important;
   box-shadow: none !important;
   background: transparent !important;
@@ -491,6 +781,140 @@ watch(showCreateInput, async (visible) => {
   cursor: pointer;
   transition: background 0.15s;
   min-width: 0;
+}
+
+.folder-table-header,
+.folder-table-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 200px;
+  align-items: center;
+  column-gap: 16px;
+}
+
+.folder-table-header {
+  flex-shrink: 0;
+  min-height: 46px;
+  margin: 12px 0 6px;
+  padding: 0 12px;
+  background: #f8fafc;
+  border-radius: 10px;
+}
+
+.folder-table-heading {
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #8a94a6;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.folder-table-heading.col-modified_time {
+  justify-content: flex-end;
+}
+
+.folder-table-heading.active {
+  color: #475569;
+}
+
+.sort-indicator {
+  flex-shrink: 0;
+}
+
+.folder-table-body {
+  padding-right: 2px;
+  overflow-x: hidden;
+}
+
+.folder-table-row {
+  padding: 12px;
+  overflow: visible;
+}
+
+.move-folder-input.folder-table-row {
+  grid-template-columns: 18px minmax(0, 1fr) 28px 28px;
+  column-gap: 8px;
+}
+
+.folder-name-cell {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.folder-name-cell .icon {
+  flex-shrink: 0;
+}
+
+.folder-name-cell .file-name {
+  flex: 1;
+  min-width: 0;
+  max-width: none !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-name-tooltip {
+  position: absolute;
+  left: 28px;
+  bottom: calc(100% + 10px);
+  z-index: 20;
+  max-width: min(520px, calc(100vw - 80px));
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid #e6eaf2;
+  background: #fff;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-all;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition:
+    opacity 0.12s ease,
+    visibility 0s linear 0.12s,
+    transform 0.12s ease;
+}
+
+.folder-name-tooltip::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  top: 100%;
+  border: 5px solid transparent;
+  border-top-color: #fff;
+  filter: drop-shadow(0 1px 0 #e6eaf2);
+}
+
+.folder-name-cell .file-name.truncated:hover + .folder-name-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  transition-delay: 0.8s, 0.8s, 0.8s;
+}
+
+.folder-time-cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #98a2b3;
+  font-size: 13px;
+  text-align: right;
 }
 
 .move-folder-input {
@@ -585,5 +1009,46 @@ watch(showCreateInput, async (visible) => {
 .folder-inline-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+@media (max-width: 640px) {
+  .folder-selector-modal-header {
+    padding: 18px 18px 0;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .folder-selector-search {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .folder-selector-content {
+    padding: 18px 18px 10px;
+  }
+
+  .folder-table-header,
+  .folder-table-row {
+    grid-template-columns: minmax(0, 1fr) 140px;
+    column-gap: 10px;
+  }
+
+  .folder-table-header {
+    padding: 0 10px;
+  }
+
+  .folder-table-heading,
+  .folder-time-cell {
+    font-size: 12px;
+  }
+
+  .folder-table-row {
+    padding: 10px;
+  }
+
+  .folder-selector-modal-footer {
+    padding: 0 18px 20px;
+  }
 }
 </style>

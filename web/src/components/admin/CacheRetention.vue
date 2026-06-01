@@ -760,7 +760,9 @@ const browseDirectory = async () => {
     window.appNotification.warning('请先选择账号')
     return
   }
-  const result = await selectFolder(selectedAccount.value.id)
+  const result = await selectFolder(selectedAccount.value.id, {
+    initialPath: newConfig.value.path
+  })
   if (result) {
     newConfig.value.path = result.path
     newConfig.value.parent_id = result.id

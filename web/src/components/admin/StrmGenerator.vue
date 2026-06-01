@@ -2280,7 +2280,9 @@ const browseDirectory = async () => {
     window.appNotification.warning('请先选择账号')
     return
   }
-  const result = await selectFolder(form.account_id)
+  const result = await selectFolder(form.account_id, {
+    initialPath: form.path
+  })
   if (result) {
     form.path = result.path
     form.parent_id = result.id
@@ -3635,7 +3637,9 @@ const browseOrganizeDir = async () => {
     window.appNotification.warning('请先选择账号')
     return
   }
-  const result = await selectFolder(organizeForm.account_id)
+  const result = await selectFolder(organizeForm.account_id, {
+    initialPath: organizeForm.target_directory
+  })
   if (result) {
     organizeForm.target_directory = result.path
     organizeForm.target_directory_id = result.id
@@ -3647,7 +3651,9 @@ const browseOrganizeTargetRoot = async () => {
     window.appNotification.warning('请先选择账号')
     return
   }
-  const result = await selectFolder(organizeForm.account_id)
+  const result = await selectFolder(organizeForm.account_id, {
+    initialPath: organizeForm.target_root
+  })
   if (result) {
     organizeForm.target_root = result.path
     organizeForm.target_root_id = result.id

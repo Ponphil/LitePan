@@ -442,7 +442,8 @@ export function useIndexFileActions({
         confirmText: '选择当前目录',
         rootId: getRootId(),
         excludedFolderIds: selectedFolderIds,
-        allowCreateFolder: true
+        allowCreateFolder: true,
+        showRefreshButton: false
       }
     }).catch(() => null)
 
@@ -565,7 +566,8 @@ export function useIndexFileActions({
         confirmText: '复制到当前目录',
         rootId: getRootId(),
         excludedFolderIds: selectedFolderIds,
-        allowCreateFolder: true
+        allowCreateFolder: true,
+        showRefreshButton: false
       }
     }).catch(() => null)
 

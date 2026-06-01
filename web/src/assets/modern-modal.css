@@ -123,10 +123,10 @@
 }
 
 .modern-modal.modal-folder-selector {
-    width: 90%;
-    max-width: 500px;
-    height: 500px;
-    max-height: 80vh;
+    width: min(90vw, 640px);
+    max-width: 640px;
+    height: 620px;
+    max-height: 86vh;
     overflow: hidden;
 }
 
