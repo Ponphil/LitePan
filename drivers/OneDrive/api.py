@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 class OneDriveAPI:
     BASE_URL = "https://graph.microsoft.com/v1.0"
-    USER_AGENT = "LitePan/0.2.0-beta"
+    USER_AGENT = "LitePan/0.3.0-beta"
 
     ENDPOINTS = {
         "me": "/me",

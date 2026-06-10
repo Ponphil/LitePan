@@ -5,7 +5,7 @@ from typing import Any, Dict, Tuple
 
 class Pan123OpenAPI:
     BASE_URL = "https://open-api.123pan.com"
-    USER_AGENT = "LitePan/0.2.0-beta"
+    USER_AGENT = "LitePan/0.3.0-beta"
 
     ENDPOINTS = {
         "user_info": "/api/v1/user/info",
