@@ -77,8 +77,13 @@ async def resolve_download(
     user_agent: str = "",
     *,
     file_info: Optional[FileItem] = None,
+    force_refresh: bool = False,
 ) -> ResolvedDownload:
-    """解析下载地址 + 文件元数据。ttl=0 也会强制给 1s 的窗口防瞬时并发击穿。"""
+    """解析下载地址 + 文件元数据。ttl=0 也会强制给 1s 的窗口防瞬时并发击穿。
+
+    force_refresh=True 时跳过缓存读取（含 1s 兜底窗口），强制向上游重取直链并刷新缓存，
+    用于上一条直链已过期/异常需要换一条新链的补救场景。
+    """
     config = getattr(driver, "config", None)
     ttl = getattr(config, "download_url_ttl", 0)
 
@@ -87,8 +92,8 @@ async def resolve_download(
 
     now = monotonic()
 
-    # 无锁快读：只有驱动明确声明 ttl>0 才走
-    if ttl > 0:
+    # 无锁快读：只有驱动明确声明 ttl>0 才走（force_refresh 直接跳过）
+    if ttl > 0 and not force_refresh:
         cached = _download_cache.get(cache_key)
         if cached and now - cached["time"] < ttl:
             return cached["result"]
@@ -99,7 +104,7 @@ async def resolve_download(
         now = monotonic()
         cached = _download_cache.get(cache_key)
         effective_ttl = max(ttl, 1)
-        if cached and now - cached["time"] < effective_ttl:
+        if not force_refresh and cached and now - cached["time"] < effective_ttl:
             return cached["result"]
 
         await ensure_driver_auth_request_allowed(driver)

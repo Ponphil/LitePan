@@ -2,10 +2,12 @@
 
 from typing import Any, Dict, Tuple
 
+from config import APP_VERSION
+
 
 class Pan123OpenAPI:
     BASE_URL = "https://open-api.123pan.com"
-    USER_AGENT = "LitePan/0.3.1-Beta"
+    USER_AGENT = f"LitePan/{APP_VERSION}"
 
     ENDPOINTS = {
         "user_info": "/api/v1/user/info",

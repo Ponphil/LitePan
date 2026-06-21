@@ -2,10 +2,12 @@
 
 from typing import Any, Dict
 
+from config import APP_VERSION
+
 
 class OneDriveAPI:
     BASE_URL = "https://graph.microsoft.com/v1.0"
-    USER_AGENT = "LitePan/0.3.1-Beta"
+    USER_AGENT = f"LitePan/{APP_VERSION}"
 
     ENDPOINTS = {
         "me": "/me",

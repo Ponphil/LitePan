@@ -7,7 +7,7 @@ from typing import Any, Dict
 from pathlib import Path
 
 APP_NAME = "LitePan"
-APP_VERSION = "0.3.1-Beta"
+APP_VERSION = "0.3.2-Beta"
 
 try:
     from core.log_manager import get_writer, LogModule

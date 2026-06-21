@@ -535,7 +535,7 @@ class StrmSyncManager:
         exclude_file_rules: List[str],
         relative_parts: PurePosixPath,
         result: List[Tuple[str, str, str, int, Optional[datetime], PurePosixPath]],
-        metadata_result: Optional[List[Tuple[str, str, int, Optional[datetime], PurePosixPath]]] = None,
+        metadata_result: Optional[List[Tuple[str, str, int, Optional[datetime], PurePosixPath, str]]] = None,
         task: Optional[StrmSyncTask] = None,
         is_root: bool = False,
         skipped_dirs: Optional[Set[PurePosixPath]] = None,
@@ -590,11 +590,11 @@ class StrmSyncManager:
         exclude_file_rules: List[str],
         relative_parts: PurePosixPath,
         result: List[Tuple[str, str, str, int, Optional[datetime], PurePosixPath]],
-        metadata_result: Optional[List[Tuple[str, str, int, Optional[datetime], PurePosixPath]]] = None,
+        metadata_result: Optional[List[Tuple[str, str, int, Optional[datetime], PurePosixPath, str]]] = None,
         task: Optional[StrmSyncTask] = None,
         skipped_dirs: Optional[Set[PurePosixPath]] = None,
     ) -> bool:
-        directory_metadata: List[Tuple[str, str, int, Optional[datetime], PurePosixPath]] = []
+        directory_metadata: List[Tuple[str, str, int, Optional[datetime], PurePosixPath, str]] = []
         directory_has_media = False
         subtree_has_media = False
         for item in files:
@@ -637,8 +637,10 @@ class StrmSyncManager:
             size = int(getattr(item, "size", 0) or 0)
             if metadata_result is not None and ext in metadata_extensions:
                 if metadata_max_size_bytes <= 0 or size <= metadata_max_size_bytes:
+                    remote_rel = relative_parts / name
+                    remote_path = str(PurePosixPath(base_posix_path) / remote_rel)
                     directory_metadata.append(
-                        (item_id, name, size, getattr(item, "modified", None), relative_parts)
+                        (item_id, name, size, getattr(item, "modified", None), relative_parts, remote_path)
                     )
                 continue
             if ext not in extensions:
@@ -1041,7 +1043,7 @@ class StrmSyncManager:
         exclude_file_rules: List[str],
         base_posix_path: str,
         result: List[Tuple[str, str, str, int, Optional[datetime], PurePosixPath]],
-        metadata_result: Optional[List[Tuple[str, str, int, Optional[datetime], PurePosixPath]]] = None,
+        metadata_result: Optional[List[Tuple[str, str, int, Optional[datetime], PurePosixPath, str]]] = None,
     ) -> Tuple[List[Dict[str, object]], Optional[Set[str]]]:
         """基础分支浅层探测：补扫本地缺失的直接子目录，并按规则自动加入临时分支。"""
         discovered: List[Dict[str, object]] = []
@@ -1201,7 +1203,7 @@ class StrmSyncManager:
         self,
         driver,
         task_root: Path,
-        metadata_items: List[Tuple[str, str, int, Optional[datetime], PurePosixPath]],
+        metadata_items: List[Tuple[str, str, int, Optional[datetime], PurePosixPath, str]],
         concurrency: int,
     ) -> int:
         """元数据（nfo / 海报 / 字幕）下载：
@@ -1218,14 +1220,14 @@ class StrmSyncManager:
         # 1. 预聚合：同一 file_id 只下载一次，写到所有 target 路径
         items_by_file_id: Dict[str, Dict[str, Any]] = {}
         seen_paths: Set[str] = set()
-        for file_id, file_name, _size, _modified, relative_dir in metadata_items:
+        for file_id, file_name, _size, _modified, relative_dir, remote_path in metadata_items:
             file_id = str(file_id)
             safe_name = self._safe_child_name(file_name)
             local_abs_path = task_root / relative_dir / safe_name
             if self._strm_path_has_oversized_component(local_abs_path):
                 if self._logger:
                     self._logger.warning(
-                        f"STRM元数据跳过(路径分量超过{_STRM_MAX_COMPONENT_BYTES}字节): {file_name}"
+                        f"STRM元数据跳过(路径分量超过{_STRM_MAX_COMPONENT_BYTES}字节): {remote_path or file_name}"
                     )
                 continue
             local_key = str(PurePosixPath(local_abs_path.relative_to(task_root)))
@@ -1240,7 +1242,7 @@ class StrmSyncManager:
                 expected_size = 0
             group = items_by_file_id.setdefault(
                 file_id,
-                {"expected_size": expected_size, "targets": []},
+                {"expected_size": expected_size, "targets": [], "remote_path": remote_path or file_name},
             )
             if expected_size > 0 and int(group.get("expected_size") or 0) <= 0:
                 group["expected_size"] = expected_size
@@ -1274,6 +1276,11 @@ class StrmSyncManager:
             class _TransientMetadataDownloadError(Exception):
                 pass
 
+            class _IntegrityMetadataError(Exception):
+                """下载内容完整性不达标（长度对不上）。这类错误重试同一条直链通常无效，
+                应由上层重新 resolve 一条新直链再补试。"""
+                pass
+
             async def fetch_metadata_content(
                 file_id: str,
                 download_url: str,
@@ -1282,8 +1289,8 @@ class StrmSyncManager:
             ) -> bytes:
                 """下载单个元数据文件。
 
-                小型 nfo/字幕/海报偶发被 CDN 断开时，重试同一个直链通常就能恢复；
-                这里不并发重新 resolve，避免把 API 请求节流绕乱。
+                网络类瞬时错误（CDN 断开、超时、5xx）重试同一直链通常即可恢复；
+                完整性错误（长度不一致）则立即抛出，交由上层重新 resolve 新直链。
                 """
                 last_error: Optional[Exception] = None
                 transient_errors = (
@@ -1325,20 +1332,59 @@ class StrmSyncManager:
 
                             expected_length = (response.headers.get("Content-Length") or "").strip()
                             if expected_length.isdigit() and len(chunks) != int(expected_length):
-                                raise aiohttp.ClientPayloadError(
+                                raise _IntegrityMetadataError(
                                     f"Content-Length不一致: expected={expected_length}, got={len(chunks)}"
                                 )
                             if expected_size > 0 and len(chunks) != expected_size:
-                                raise aiohttp.ClientPayloadError(
+                                raise _IntegrityMetadataError(
                                     f"文件大小不一致: expected={expected_size}, got={len(chunks)}"
                                 )
                             return bytes(chunks)
+                    except _IntegrityMetadataError:
+                        # 完整性错误：同一直链重试无意义，立即抛出由上层重新 resolve
+                        raise
                     except transient_errors as err:
                         last_error = err
                         if attempt >= 2:
                             break
                         await asyncio.sleep(0.5 * (attempt + 1))
 
+                raise last_error or Exception("元数据下载失败")
+
+            async def fetch_metadata_resilient(
+                file_id: str,
+                download_url: str,
+                headers: dict,
+                expected_size: int = 0,
+            ) -> bytes:
+                """带“重新 resolve 直链”的下载：先用已有直链下载；遇到完整性/网络错误时，
+                重新 resolve 一条新直链并重建 headers 再补试，最多重新 resolve 2 次。
+                重新 resolve 的节流仍由驱动层 wait_for_request_interval 统一处理。"""
+                url, hdrs, size = download_url, headers, expected_size
+                last_error: Optional[Exception] = None
+                for resolve_round in range(3):  # 1 次原直链 + 最多 2 次重新 resolve
+                    try:
+                        return await fetch_metadata_content(file_id, url, hdrs, size)
+                    except Exception as err:
+                        last_error = err
+                        if resolve_round >= 2:
+                            break
+                        try:
+                            # force_refresh 跳过 1s 兜底缓存，确保拿到的是新直链而非刚才那条坏链
+                            refreshed = await resolve_download(driver, file_id, "", force_refresh=True)
+                            if not refreshed.download_url:
+                                raise Exception("无下载地址")
+                            url = refreshed.download_url
+                            # 只在原本不知道大小时才补；已有扫描列表大小则保留，
+                            # 避免被补救直链返回的错误大小拉低校验基准而误收不完整文件
+                            refreshed_size = int(getattr(refreshed, "file_size", 0) or 0)
+                            if size <= 0 and refreshed_size > 0:
+                                size = refreshed_size
+                            hdrs = await build_upstream_download_headers(
+                                driver, file_id, "", prefer_identity=True
+                            )
+                        except Exception:
+                            break  # 重新 resolve 失败就不再补试，沿用最初的下载错误
                 raise last_error or Exception("元数据下载失败")
 
             async def resolver():
@@ -1348,6 +1394,7 @@ class StrmSyncManager:
                     for file_id, group in items_by_file_id.items():
                         targets = group.get("targets") or []
                         expected_size = int(group.get("expected_size") or 0)
+                        remote_path = group.get("remote_path") or file_id
                         try:
                             download = await resolve_download(driver, file_id, "")
                             if not download.download_url:
@@ -1363,12 +1410,11 @@ class StrmSyncManager:
                         except Exception as err:
                             failed_count += len(targets)
                             if self._logger:
-                                first_name = targets[0][1] if targets else file_id
                                 self._logger.warning(
-                                    f"STRM元数据获取直链失败: {first_name} (file_id={file_id}) - {err}"
+                                    f"STRM元数据获取直链失败: {remote_path} (file_id={file_id}) - {err}"
                                 )
                             continue
-                        await download_queue.put((file_id, targets, download.download_url, headers, expected_size))
+                        await download_queue.put((file_id, targets, download.download_url, headers, expected_size, remote_path))
                 finally:
                     # 哨兵通知所有消费者退出
                     for _ in range(cdn_concurrency):
@@ -1381,11 +1427,11 @@ class StrmSyncManager:
                     msg = await download_queue.get()
                     if msg is None:
                         return
-                    file_id, targets, download_url, headers, expected_size = msg
+                    file_id, targets, download_url, headers, expected_size, remote_path = msg
                     primary_path, primary_name = targets[0]
                     tmp_path = primary_path.with_name(primary_path.name + ".tmp")
                     try:
-                        content = await fetch_metadata_content(file_id, download_url, headers, expected_size)
+                        content = await fetch_metadata_resilient(file_id, download_url, headers, expected_size)
 
                         primary_path.parent.mkdir(parents=True, exist_ok=True)
                         tmp_path.write_bytes(content)
@@ -1407,6 +1453,7 @@ class StrmSyncManager:
                                     action="metadata_write",
                                     file_id=file_id,
                                     file_name=extra_name,
+                                    remote_path=remote_path,
                                     local_path=extra_path,
                                 )
                     except (OSError, ValueError) as err:
@@ -1421,6 +1468,7 @@ class StrmSyncManager:
                             action="metadata_write",
                             file_id=file_id,
                             file_name=primary_name,
+                            remote_path=remote_path,
                             local_path=primary_path,
                         )
                     except Exception as err:
@@ -1432,7 +1480,7 @@ class StrmSyncManager:
                             pass
                         if self._logger:
                             self._logger.warning(
-                                f"STRM元数据下载失败: {primary_name} (file_id={file_id}) - {err}"
+                                f"STRM元数据下载失败: {remote_path} (file_id={file_id}) - {err}"
                             )
 
             await asyncio.gather(
@@ -1630,7 +1678,7 @@ class StrmSyncManager:
             skipped_dirs: Set[PurePosixPath] = set()
 
             collected: List[Tuple[str, str, str, int, Optional[datetime], PurePosixPath]] = []
-            metadata_collected: List[Tuple[str, str, int, Optional[datetime], PurePosixPath]] = []
+            metadata_collected: List[Tuple[str, str, int, Optional[datetime], PurePosixPath, str]] = []
             base_posix_path = "/" + task.path.strip("/")
             base_posix_path = "/" if base_posix_path == "/" else base_posix_path.rstrip("/")
 
