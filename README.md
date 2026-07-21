@@ -1,67 +1,133 @@
-# LitePan v0.3.2-Beta
+<a name="readme-top"></a>
 
-LitePan 是一个多网盘聚合与管理工具，支持 Web 界面、WebDAV、STRM 生成、媒体整理等功能。
+<div align="center">
 
-官网 / 文档站：[http://www.litepan.top](http://www.litepan.top)
+<img src="docs/pictures/banner.png" alt="LitePan" width="100%">
 
-默认服务端口：**5211**
 
-## 许可证
+<a href="https://www.litepan.top"><img src="https://img.shields.io/badge/官网文档-www.litepan.top-6C63FF?style=for-the-badge&labelColor=1B1B2F" alt="官网文档"></a>
+&nbsp;
+<a href="https://space.bilibili.com/1501989416"><img src="https://img.shields.io/badge/Bilibili-交流与演示-00A1D6?style=for-the-badge&logo=bilibili&logoColor=white&labelColor=1B1B2F" alt="Bilibili"></a>
+&nbsp;
+<a href="https://hub.docker.com/r/ponphil/litepan"><img src="https://img.shields.io/badge/Docker-ponphil%2Flitepan-2496ED?style=for-the-badge&logo=docker&logoColor=white&labelColor=1B1B2F" alt="Docker"></a>
 
-本项目采用 [PolyForm Noncommercial License 1.0.0](./LICENSE)。
 
-- ✅ 允许：个人学习、研究、测试、 hobby 项目等非商业用途
-- ✅ 允许：Fork 仓库用于非商业目的
-- ❌ 禁止：任何商业用途（收费服务、集成到商业产品、公司内部商用等）
+[![docker-pulls][docker-pulls-shield]][docker-url]
+[![version][version-shield]][docker-url]
+[![license][license-shield]][license-url]
 
-如需商业授权，请通过 [B 站主页](https://space.bilibili.com/1501989416) 联系作者另行协商。
+</div>
 
-## 贡献与反馈
+<br>
 
-- 暂不接受公开 Pull Request（目前主要由个人维护，暂时无法持续审核）
-- 如有意愿合作、共同维护此项目，或有使用疑问，请通过 [B 站主页](https://space.bilibili.com/1501989416) 联系我
+> [!IMPORTANT]
+> **当前项目正在全面重构。**  
+> 全新 **Go 版 LitePan** 即将取代本仓库，性能与架构都会焕然一新，**敬请期待**。  
+> Python 旧版已归档至 [LitePan-old](https://github.com/Ponphil/LitePan-old)。
 
-## 快速启动
+使用说明与进阶配置，请查看 **[官网文档](https://www.litepan.top)**（文档站点持续更新中）。
+
+<br>
+
+## ▎ 多网盘聚合
+
+统一接入 115 / 123 / 百度 / 夸克 / 光鸭 / 天翼 / 移动 / OneDrive / WebDAV / 本地盘。  
+浏览、上传、下载、预览与跨盘操作，一套界面完成。
+
+<!-- ![多网盘聚合](docs/pictures/feature-browser.png) -->
+
+<br>
+
+## ▎ STRM 影音库
+
+按任务生成 `.strm`，对接 Emby / Jellyfin 等快速入库。  
+支持增量同步、刮削海报墙与播放鉴权。
+
+<!-- ![STRM 影音库](docs/pictures/feature-strm.png) -->
+
+<br>
+
+## ▎ 智能目录整理
+
+TMDB 识别、重命名与归档预览，先看计划再执行。  
+把杂乱资源整理成标准电影 / 剧集结构。
+
+<!-- ![智能目录整理](docs/pictures/feature-organize.png) -->
+
+<br>
+
+## ▎ 挂载与直链播放
+
+WebDAV / FUSE 挂成「本地盘」；播放走 302 或代理直链，减轻 NAS 带宽压力。
+
+<!-- ![挂载与直链播放](docs/pictures/feature-mount.png) -->
+
+<br>
+
+## ▎ 跨盘 · 离线 · 自动化
+
+网盘间优先秒传，支持离线下载。  
+规则联动整理、STRM 与通知，转存后自动入库。
+
+<!-- ![跨盘与自动化](docs/pictures/feature-automation.png) -->
+
+<br>
+
+---
+
+## ▎ 快速开始
 
 ```bash
 docker run -d \
   --name litepan \
   --restart unless-stopped \
-  --network host \
   -e TZ=Asia/Shanghai \
-  -p 5211:5211 \
+  -p 5212:5212 \
   -v ./data:/app/data \
-  -v ./log:/app/log \
-  -v ./strm:/app/strm \
-  -v ./plugins:/app/plugins \
+  -v ./mounts:/app/mounts:shared \
+  --device /dev/fuse \
+  --privileged \
   ponphil/litepan:latest
 ```
 
-浏览器访问：`http://localhost:5211`
-
-更多说明见 [DOCKER.md](./DOCKER.md)。
-
-
-## 目录结构
-
-```
-├── api/            # HTTP API
-├── core/           # 核心逻辑
-├── drivers/        # 各网盘驱动
-├── web/            # 前端源码与静态资源
-├── webdav/         # WebDAV 服务
-├── mediaorganize/  # 媒体整理
-├── main.py         # 程序入口
-├── config.py       # 配置
-├── docker-compose.yml
-└── Dockerfile
+```bash
+docker compose up -d
 ```
 
-## 支持的网盘驱动
+打开 `http://你的IP:5212`，按提示设置管理员密码。  
+需要 FUSE 时请确保宿主机具备 `/dev/fuse` 权限。
 
-项目包含多种网盘驱动（115网盘、123云盘、百度网盘、夸克网盘、光鸭云盘、移动云盘、天翼云盘等），具体以 `drivers/` 目录为准。
+<br>
 
+---
 
-## 免责声明
+## ▎ 反馈
 
-本项目仅供学习与个人非商业使用。使用各网盘 API 时请遵守对应平台的服务条款。作者不对因使用本项目产生的任何损失负责。
+交流：[B 站主页](https://space.bilibili.com/1501989416)　·　暂不接受公开 PR
+
+<br>
+
+---
+
+### ▎ 支持 LitePan
+
+如果这个项目对你有帮助，欢迎点右上角 **Star**，也欢迎自愿赞赏。
+
+<img align="left" src="docs/pictures/wechat-tip.png" alt="微信赞赏" width="340">
+
+<br clear="all">
+
+<br>
+
+---
+
+## ▎ 许可
+
+[PolyForm Noncommercial 1.0.0](./LICENSE) — 个人学习与非商业使用，**禁止商用**。  
+第三方依赖见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。请遵守各网盘服务条款与当地法规。
+
+[docker-pulls-shield]: https://img.shields.io/docker/pulls/ponphil/litepan?logo=docker&logoColor=white&style=flat-square
+[version-shield]: https://img.shields.io/badge/Version-v0.4.0--beta-6C63FF?style=flat-square
+[license-shield]: https://img.shields.io/badge/License-PolyForm%20NC-red?style=flat-square
+[docker-url]: https://hub.docker.com/r/ponphil/litepan
+[license-url]: ./LICENSE
