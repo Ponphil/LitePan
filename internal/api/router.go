@@ -189,6 +189,7 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(trackResponseCommit)
 	r.Use(chimw.RequestID)
 	r.Use(h.attachRequestLogger)
+	r.Use(h.logSlowDashboardRequests)
 	r.Use(chimw.Recoverer)
 
 	r.Route("/api", func(r chi.Router) {

@@ -27,6 +27,7 @@ import "@/styles/admin-shared.css";
 
 const OVERVIEW_TAB = "overview";
 const LOGS_TAB = "logs";
+const OVERVIEW_REVEAL_DEADLINE_MS = 1000;
 const VALID_TABS = [OVERVIEW_TAB, LOGS_TAB] as const;
 
 const tabs = [
@@ -48,23 +49,13 @@ const organizeTasks = ref<MediaOrganizeTask[]>([]);
 const notifications = ref<NotificationItem[]>([]);
 const unreadCount = ref(0);
 const logStats = ref<LogStats | null>(null);
-const loading = ref(false);
+const loading = ref(true);
 const refreshing = ref(false);
 const clearingCache = ref(false);
 const loadError = ref("");
+const hasLoadedOverview = ref(false);
+let overviewLoadSequence = 0;
 useAdminPageLoading("dashboard", computed(() => activeTab.value === OVERVIEW_TAB && loading.value));
-
-type OverviewResult =
-  | Account[]
-  | StrmTask[]
-  | { items: CacheRetentionTask[]; startup_remaining: number }
-  | CacheRetentionStats
-  | FuseMount[]
-  | MediaOrganizeTask[]
-  | CacheStats
-  | { items: NotificationItem[] }
-  | { count: number }
-  | LogStats;
 
 const accountCount = computed(() => accounts.value.length);
 const activeAccountCount = computed(() => accounts.value.filter((account) => account.is_active).length);
@@ -182,64 +173,86 @@ const organizeTaskDetail = computed(() => {
 });
 
 async function loadOverview() {
-  const firstLoad = !accounts.value.length && !strmTasks.value.length && !cacheRetentionTasks.value.length;
+  const firstLoad = !hasLoadedOverview.value;
+  const sequence = ++overviewLoadSequence;
+  const errors: unknown[] = [];
   loading.value = firstLoad;
   refreshing.value = !firstLoad;
   loadError.value = "";
-  try {
-    const requests = [
-      accountsApi.list(),
-      fetchStrmTasks(),
-      fetchCacheRetentionTasks(),
-      fetchCacheRetentionStats(),
-      fetchFuseMounts(),
-      fetchMediaOrganizeTasks(),
-      fetchCacheStats(),
-      fetchNotifications({ limit: 1, offset: 0 }),
-      fetchUnreadCount(),
-      logsApi().stats(),
-    ] as const;
-    const results = await Promise.allSettled(requests);
-    const failed = results.find((result) => result.status === "rejected");
-
-    assignSettled(results[0], (value) => {
+  const requests = [
+    loadOverviewPart(sequence, accountsApi.list(), (value) => {
       accounts.value = value;
-    });
-    assignSettled(results[1], (value) => {
+    }, errors),
+    loadOverviewPart(sequence, fetchStrmTasks(), (value) => {
       strmTasks.value = value;
-    });
-    assignSettled(results[2], (value) => {
+    }, errors),
+    loadOverviewPart(sequence, fetchCacheRetentionTasks(), (value) => {
       cacheRetentionTasks.value = value.items ?? [];
-    });
-    assignSettled(results[3], (value) => {
+    }, errors),
+    loadOverviewPart(sequence, fetchCacheRetentionStats(), (value) => {
       cacheRetentionStats.value = value;
-    });
-    assignSettled(results[4], (value) => {
+    }, errors),
+    loadOverviewPart(sequence, fetchFuseMounts(), (value) => {
       fuseMounts.value = value;
-    });
-    assignSettled(results[5], (value) => {
+    }, errors),
+    loadOverviewPart(sequence, fetchMediaOrganizeTasks(), (value) => {
       organizeTasks.value = value;
-    });
-    assignSettled(results[6], (value) => {
+    }, errors),
+    loadOverviewPart(sequence, fetchCacheStats(), (value) => {
       cacheStats.value = value;
-    });
-    assignSettled(results[7], (value) => {
+    }, errors),
+    loadOverviewPart(sequence, fetchNotifications({ limit: 1, offset: 0 }), (value) => {
       notifications.value = value.items ?? [];
-    });
-    assignSettled(results[8], (value) => {
+    }, errors),
+    loadOverviewPart(sequence, fetchUnreadCount(), (value) => {
       unreadCount.value = value.count ?? 0;
-    });
-    assignSettled(results[9], (value) => {
+    }, errors),
+    loadOverviewPart(sequence, logsApi().stats(), (value) => {
       logStats.value = value;
-    });
+    }, errors),
+  ];
+  const settled = Promise.allSettled(requests);
 
-    if (failed?.status === "rejected") {
-      loadError.value = getApiErrorMessage(failed.reason, "部分运行概况加载失败，已保留可用数据");
-    }
-  } finally {
+  await revealOverviewWhenReady(settled);
+  if (sequence === overviewLoadSequence) {
+    hasLoadedOverview.value = true;
     loading.value = false;
     refreshing.value = false;
   }
+
+  void settled.then(() => {
+    if (sequence !== overviewLoadSequence || errors.length === 0) return;
+    loadError.value = getApiErrorMessage(errors[0], "部分运行概况加载失败，已保留可用数据");
+  });
+}
+
+async function loadOverviewPart<T>(
+  sequence: number,
+  request: Promise<T>,
+  assign: (value: T) => void,
+  errors: unknown[],
+) {
+  try {
+    const value = await request;
+    if (sequence === overviewLoadSequence) assign(value);
+  } catch (error) {
+    if (sequence === overviewLoadSequence) errors.push(error);
+  }
+}
+
+function revealOverviewWhenReady(requests: Promise<unknown>) {
+  return new Promise<void>((resolve) => {
+    let resolved = false;
+    let timer: number | undefined;
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      resolve();
+    };
+    timer = window.setTimeout(finish, OVERVIEW_REVEAL_DEADLINE_MS);
+    void requests.finally(finish);
+  });
 }
 
 async function clearDashboardCache() {
@@ -264,13 +277,6 @@ function openErrorLogs() {
 
 function handleLogStatsAcked(next: LogStats) {
   logStats.value = next;
-}
-
-function assignSettled<T extends OverviewResult>(
-  result: PromiseSettledResult<T>,
-  assign: (value: T) => void,
-) {
-  if (result.status === "fulfilled") assign(result.value);
 }
 
 function normalizeStatus(status?: string) {

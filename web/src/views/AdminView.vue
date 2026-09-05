@@ -3,7 +3,6 @@ import "@fortawesome/fontawesome-free/css/all.min.css";
 import {
   computed,
   defineAsyncComponent,
-  onBeforeUnmount,
   onMounted,
   ref,
   watch,
@@ -77,8 +76,6 @@ const router = useRouter();
 const auth = useAuthStore();
 const { dirty, confirmLeave, discardChanges } = useUnsavedChanges();
 let resetBrowserLocationOnLeave = false;
-let preloadTimer: number | null = null;
-let preloadIdleHandle: number | null = null;
 const preloadedPages = new Set<string>();
 
 const mustChangePassword = computed(() => auth.mustChangePassword);
@@ -148,21 +145,6 @@ function preloadAdminPage(key: string) {
   if (!loader || preloadedPages.has(key)) return;
   preloadedPages.add(key);
   void loader().catch(() => preloadedPages.delete(key));
-}
-
-function preloadAdminPages() {
-  navKeys.forEach(preloadAdminPage);
-}
-
-function scheduleAdminPagePreload() {
-  preloadTimer = window.setTimeout(() => {
-    preloadTimer = null;
-    if ("requestIdleCallback" in window) {
-      preloadIdleHandle = window.requestIdleCallback(preloadAdminPages, { timeout: 1500 });
-      return;
-    }
-    preloadAdminPages();
-  }, 300);
 }
 
 async function loadAdminUiConfig() {
@@ -278,14 +260,6 @@ onMounted(async () => {
   if (mustChangePassword.value) {
     page.value = "settings";
     router.replace({ query: buildPageQuery("settings") });
-  }
-  scheduleAdminPagePreload();
-});
-
-onBeforeUnmount(() => {
-  if (preloadTimer !== null) window.clearTimeout(preloadTimer);
-  if (preloadIdleHandle !== null && "cancelIdleCallback" in window) {
-    window.cancelIdleCallback(preloadIdleHandle);
   }
 });
 </script>
