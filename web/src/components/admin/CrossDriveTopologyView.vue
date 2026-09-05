@@ -81,9 +81,20 @@ const selectedRoute = computed(() => props.routes.find((r) => r.id === props.sel
 /* —— 几何 —— */
 const ROW_GAP = 64;
 const PAD_Y = 30;
-const XL = 104;
-const XR = computed(() => Math.max(XL + 260, cw.value - 104));
-const CARD_W = 168;
+const DESKTOP_CARD_W = 168;
+const COMPACT_CARD_W = 132;
+const COMPACT_CARD_GAP = 16;
+const COMPACT_EDGE_GAP = 4;
+const cardWidth = computed(() => {
+  if (!compact.value) return DESKTOP_CARD_W;
+  const available = cw.value - COMPACT_CARD_GAP - COMPACT_EDGE_GAP * 2;
+  return Math.min(COMPACT_CARD_W, Math.max(96, available / 2));
+});
+const XL = computed(() => compact.value ? cardWidth.value / 2 + COMPACT_EDGE_GAP : 104);
+const XR = computed(() => {
+  if (compact.value) return cw.value - cardWidth.value / 2 - COMPACT_EDGE_GAP;
+  return Math.max(XL.value + 260, cw.value - 104);
+});
 const yOf = (i: number) => PAD_Y + i * ROW_GAP;
 const ch = computed(() => PAD_Y * 2 + (Math.max(2, nodes.value.length) - 1) * ROW_GAP);
 
@@ -101,11 +112,13 @@ function geom(p: Pair): Geom {
   const y1 = yOf(i1);
   const y2 = yOf(i2);
   // 端点贴卡片外边缘，不进入卡片框内
-  const a = { x: XL + CARD_W / 2, y: y1 };
-  const b = { x: XR.value - CARD_W / 2, y: y2 };
+  const a = { x: XL.value + cardWidth.value / 2, y: y1 };
+  const b = { x: XR.value - cardWidth.value / 2, y: y2 };
   const bend = 34 + (Math.abs(i1 - i2) % 4) * 16;
-  const c1x = a.x + bend * 1.6;
-  const c2x = b.x - bend * 1.6;
+  const horizontalGap = Math.max(0, b.x - a.x);
+  const curve = Math.min(bend * 1.6, Math.max(6, horizontalGap * 0.44));
+  const c1x = a.x + curve;
+  const c2x = b.x - curve;
   const d = `M ${a.x} ${a.y} C ${c1x} ${a.y}, ${c2x} ${b.y}, ${b.x} ${b.y}`;
   return { p, d, mid: { x: (c1x + c2x) / 2, y: (a.y + b.y) / 2 } };
 }
@@ -179,7 +192,7 @@ function tipStyle(p: Pair) {
 
 function measure() {
   if (holderRef.value) {
-    cw.value = Math.max(360, holderRef.value.clientWidth);
+    cw.value = Math.max(1, holderRef.value.clientWidth);
     compact.value = holderRef.value.clientWidth < 560;
   }
 }
@@ -246,7 +259,7 @@ function markLogoFailed(k: string) {
         :key="'L' + k"
         class="air-card L"
         :class="sideState('L', k)"
-        :style="{ left: `${XL}px`, top: `${yOf(i)}px` }"
+        :style="{ left: `${XL}px`, top: `${yOf(i)}px`, width: `${cardWidth}px` }"
         @click="clickLeft(k)"
       >
         <span class="ac-jack" />
@@ -261,7 +274,7 @@ function markLogoFailed(k: string) {
         :key="'R' + k"
         class="air-card R"
         :class="sideState('R', k)"
-        :style="{ left: `${XR}px`, top: `${yOf(i)}px` }"
+        :style="{ left: `${XR}px`, top: `${yOf(i)}px`, width: `${cardWidth}px` }"
         @click="clickRight(k)"
       >
         <span class="ac-nm">{{ panOf(k).name }}</span>
@@ -520,10 +533,7 @@ function markLogoFailed(k: string) {
   margin-left: 4px;
 }
 
-/* 窄窗紧凑：卡片收窄、文字截断防叠 */
-.air-c .air-card {
-  width: 132px;
-}
+/* 窄窗紧凑：卡片宽度由可用空间动态计算，文字截断防叠 */
 .air-c .ac-nm {
   font-size: 11px;
 }

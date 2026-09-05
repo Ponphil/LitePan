@@ -1718,4 +1718,40 @@ onUnmounted(() => {
 .mx-empty i { font-size: 30px; margin-bottom: 8px; color: #7f93c4; }
 .mx-empty p { font-weight: 600; color: #dbe6ff; }
 .mx-empty small { font-size: 12px; }
+
+@media (max-width: 640px) {
+  .mx-shell {
+    width: calc(100vw - 40px);
+    max-height: calc(100dvh - 24px);
+  }
+  .mx-bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 10px;
+    padding: 14px 12px 4px;
+  }
+  .mx-title {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .mx-status {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: stretch;
+    text-align: left;
+  }
+  .mx-x {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .mx-scroll {
+    min-height: 0;
+    padding: 6px 8px 0;
+  }
+  .mx-foot {
+    padding: 8px 12px 12px;
+  }
+  .mx-btn.go {
+    width: 100%;
+  }
+}
 </style>
